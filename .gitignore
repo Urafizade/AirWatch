@@ -3,6 +3,11 @@ dist/
 .env
 .env.local
 .env.*.local
+
+# Manually allow example files
+!env.example
+!.env.example
+
 /.idea
 /.vscode
 venv/

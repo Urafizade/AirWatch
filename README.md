@@ -1,7 +1,7 @@
 
   # Air Quality Dashboard
 
-  This is a code bundle for Air Quality Dashboard. The original project is available at https://www.figma.com/design/RVGlxy8W81sHR4Q8Ny0jOI/Air-Quality-Dashboard.
+  This is a code bundle for updated Pollution Map
 
   ## Running the code
 

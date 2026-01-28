@@ -64,8 +64,7 @@ export function AirQualityMap() {
   const [tilesError, setTilesError] = useState<string | null>(null);
   const mapRef = useRef<HTMLDivElement | null>(null);
 
-  // We keep the existing AQ coarse endpoint available but for the Google heatmap tiles
-  // we'll request per-tile images from the server proxy '/make-server-203376f4/heatmap-tile'.
+  // We request per-tile images directly from Google heatmap API
   useEffect(() => {
     // keep a light check to know we're attempting to render heatmap tiles
     setTilesLoading(true);
@@ -136,11 +135,12 @@ export function AirQualityMap() {
       const key = `${item.z}_${item.x}_${item.y}`;
       if (tileImageMap[key] !== undefined) return; // already fetched or failed
       try {
-        // Prefer direct Google tile fetch from client if API key is available in Vite env.
         const GOOGLE_KEY = String((import.meta as any).env?.VITE_GOOGLE_AIR_QUALITY_API_KEY || '');
-        const tileUrl = GOOGLE_KEY
-          ? `https://airquality.googleapis.com/v1/mapTypes/UAQI_RED_GREEN/heatmapTiles/${item.z}/${item.x}/${item.y}?key=${encodeURIComponent(GOOGLE_KEY)}`
-          : `/make-server-203376f4/heatmap-tile?z=${item.z}&x=${item.x}&y=${item.y}`;
+        if (!GOOGLE_KEY) {
+          setTileImageMap(prev => ({ ...prev, [key]: null }));
+          return;
+        }
+        const tileUrl = `https://airquality.googleapis.com/v1/mapTypes/UAQI_RED_GREEN/heatmapTiles/${item.z}/${item.x}/${item.y}?key=${encodeURIComponent(GOOGLE_KEY)}`;
         const res = await fetch(tileUrl);
         if (!res.ok) {
           setTileImageMap(prev => ({ ...prev, [key]: null }));
@@ -203,7 +203,7 @@ export function AirQualityMap() {
         </CardHeader>
         <CardContent>
           <div ref={mapRef} onClick={async (e) => {
-              // click-to-select: compute lat/lng from click position and reverse-geocode via server
+              // click-to-select: compute lat/lng from click position and reverse-geocode via Google API
               try {
                 const rect = (mapRef.current as HTMLDivElement).getBoundingClientRect();
                 const clickX = (e as any).clientX - rect.left;
@@ -211,25 +211,40 @@ export function AirQualityMap() {
                 const worldX = topLeftWorld.x + clickX;
                 const worldY = topLeftWorld.y + clickY;
                 const { lat, lng } = worldPixelToLonLat(worldX, worldY);
-                // call server reverse-geocode
-                const res = await fetch('/make-server-203376f4/reverse-geocode', {
-                  method: 'POST',
-                  headers: { 'Content-Type': 'application/json' },
-                  body: JSON.stringify({ lat, lng })
-                });
-                const json = await res.json();
-                if (res.ok && json && json.id) {
-                  setSelectedLocation(json);
-                  try {
-                    if (json.coordinates && typeof json.coordinates.lat === 'number' && typeof json.coordinates.lng === 'number') {
-                      setMapCenterState({ lat: json.coordinates.lat, lng: json.coordinates.lng });
-                    }
-                  } catch (e) {
-                    // ignore
-                  }
-                } else {
-                  console.warn('Reverse geocode failed', json);
+                // call Google Geocoding API directly
+                const GEOCODING_KEY = String((import.meta as any).env?.VITE_GOOGLE_GEOCODING_API_KEY || '');
+                if (!GEOCODING_KEY) {
+                  console.warn('Google Geocoding API key not found');
+                  return;
                 }
+                const url = `https://maps.googleapis.com/maps/api/geocode/json?latlng=${encodeURIComponent(lat + ',' + lng)}&key=${encodeURIComponent(GEOCODING_KEY)}`;
+                const res = await fetch(url);
+                if (!res.ok) {
+                  console.warn('Reverse geocode failed', res.status);
+                  return;
+                }
+                const data = await res.json();
+                const first = Array.isArray(data.results) ? data.results[0] : null;
+                if (!first) {
+                  console.warn('No geocoding result found');
+                  return;
+                }
+                const getComponent = (types: string[]) => {
+                  const comp = first.address_components?.find((c: any) => c.types?.some((t: string) => types.includes(t)));
+                  return comp?.long_name || comp?.short_name || undefined;
+                };
+                const name = first.formatted_address || getComponent(['locality', 'administrative_area_level_1']) || 'Unknown';
+                const country = getComponent(['country']) || '';
+                const placeId = first.place_id || `rev-${lat.toFixed(3)}-${lng.toFixed(3)}`;
+                const location = {
+                  id: placeId,
+                  name,
+                  country,
+                  coordinates: { lat, lng },
+                  timezone: 'UTC'
+                };
+                setSelectedLocation(location);
+                setMapCenterState({ lat, lng });
               } catch (err) {
                 console.error('click-to-select error', err);
               }
@@ -243,7 +258,7 @@ export function AirQualityMap() {
               ))}
             </div>
 
-            {/* Google Air Quality heatmap tiles (proxied) aligned to the same tile grid as OSM */}
+            {/* Google Air Quality heatmap tiles aligned to the same tile grid as OSM */}
             {tilesToRender.map((t, i) => {
               const key = `${t.z}_${t.x}_${t.y}`;
               const url = tileImageMap[key];
